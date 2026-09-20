@@ -1,0 +1,277 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "XafRagSQL — RAG on SQL Server 2025",
+    "output": "architecture.html",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "query-path",
+        "label": "Ask a question",
+        "focus": [
+          "user",
+          "chat",
+          "ragservice",
+          "embedding",
+          "ragctx",
+          "sql"
+        ],
+        "note": "Embed the question, rank chunks by cosine distance, answer from the retrieved context."
+      },
+      {
+        "id": "ingest-path",
+        "label": "Ingest a document",
+        "focus": [
+          "xafviews",
+          "ingestion",
+          "embedding",
+          "ragctx",
+          "sql"
+        ],
+        "note": "Saving a Document or KnowledgeArticle chunks it, embeds each chunk and writes the vectors."
+      },
+      {
+        "id": "external",
+        "label": "What leaves the box",
+        "focus": [
+          "embedding",
+          "ragservice",
+          "openai"
+        ],
+        "note": "The only outbound calls: embeddings for indexing and retrieval, and the chat completion itself."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "xafviews",
+      "type": "frontend",
+      "label": "XAF Views",
+      "sublabel": "Document / KnowledgeArticle",
+      "pos": [
+        200,
+        60
+      ],
+      "size": [
+        170,
+        64
+      ]
+    },
+    {
+      "id": "ingestion",
+      "type": "backend",
+      "label": "IngestionService",
+      "sublabel": "split into chunks",
+      "pos": [
+        470,
+        60
+      ],
+      "size": [
+        170,
+        64
+      ]
+    },
+    {
+      "id": "embedding",
+      "type": "backend",
+      "label": "EmbeddingService",
+      "sublabel": "Microsoft.Extensions.AI",
+      "pos": [
+        740,
+        300
+      ],
+      "size": [
+        180,
+        64
+      ]
+    },
+    {
+      "id": "openai",
+      "type": "external",
+      "label": "OpenAI API",
+      "sublabel": "embeddings + chat",
+      "pos": [
+        1080,
+        300
+      ],
+      "size": [
+        170,
+        64
+      ]
+    },
+    {
+      "id": "user",
+      "type": "external",
+      "label": "User",
+      "sublabel": "Browser",
+      "pos": [
+        40,
+        560
+      ],
+      "size": [
+        120,
+        60
+      ]
+    },
+    {
+      "id": "chat",
+      "type": "frontend",
+      "label": "DxAIChat UI",
+      "sublabel": "RAG Chat view",
+      "pos": [
+        230,
+        560
+      ],
+      "size": [
+        170,
+        64
+      ]
+    },
+    {
+      "id": "ragservice",
+      "type": "backend",
+      "label": "RagService",
+      "sublabel": "retrieve + answer",
+      "pos": [
+        470,
+        560
+      ],
+      "size": [
+        170,
+        64
+      ]
+    },
+    {
+      "id": "ragctx",
+      "type": "backend",
+      "label": "RagDbContext",
+      "sublabel": "knowledge_chunks",
+      "pos": [
+        820,
+        560
+      ],
+      "size": [
+        180,
+        64
+      ]
+    },
+    {
+      "id": "sql",
+      "type": "database",
+      "label": "SQL Server 2025",
+      "sublabel": "VECTOR(1536) float32",
+      "pos": [
+        1160,
+        560
+      ],
+      "size": [
+        180,
+        70
+      ],
+      "tag": "v17+"
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "XafRag.Blazor.Server",
+      "wraps": [
+        "xafviews",
+        "ingestion",
+        "embedding",
+        "chat",
+        "ragservice"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "views-ingest",
+      "from": "xafviews",
+      "to": "ingestion",
+      "label": "on save"
+    },
+    {
+      "id": "ingest-embed",
+      "from": "ingestion",
+      "to": "embedding",
+      "label": "chunk text"
+    },
+    {
+      "id": "embed-openai",
+      "from": "embedding",
+      "to": "openai",
+      "label": "text-embedding-3-small"
+    },
+    {
+      "id": "embed-ragctx",
+      "from": "embedding",
+      "to": "ragctx",
+      "label": "store vectors",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "user-chat",
+      "from": "user",
+      "to": "chat",
+      "label": "HTTPS",
+      "variant": "emphasis"
+    },
+    {
+      "id": "chat-rag",
+      "from": "chat",
+      "to": "ragservice",
+      "label": "ask"
+    },
+    {
+      "id": "rag-embed",
+      "from": "ragservice",
+      "to": "embedding",
+      "label": "embed query"
+    },
+    {
+      "id": "rag-ragctx",
+      "from": "ragservice",
+      "to": "ragctx",
+      "label": "VECTOR_DISTANCE cosine",
+      "variant": "emphasis",
+      "labelDy": 20
+    },
+    {
+      "id": "ragctx-sql",
+      "from": "ragctx",
+      "to": "sql"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Retrieval",
+      "items": [
+        "Question embedded to a 1536-dim float32 vector",
+        "Chunks ranked by VECTOR_DISTANCE('cosine', ...)",
+        "Matches under the distance threshold become context"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Storage",
+      "items": [
+        "Native SQL Server 2025 VECTOR(1536) column",
+        "Exact kNN - scans every row, no vector index",
+        "VECTOR_SEARCH and vector indexes are still experimental"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Two DbContexts, one database",
+      "items": [
+        "XafRagEFCoreDbContext owns the XAF entities",
+        "RagDbContext owns knowledge_chunks, created by an EF migration",
+        "Cascade FKs are added at database level, not in either model"
+      ]
+    }
+  ]
+}

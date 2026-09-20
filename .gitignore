@@ -1,0 +1,14 @@
+.vs/
+bin/
+obj/
+*.user
+*.suo
+*.csproj.user
+appsettings.Development.json
+excalidraw.log
+
+# Serilog runtime output
+logs/
+
+# Archify visual-check sidecars (regenerable)
+docs/*.visual-check.*
