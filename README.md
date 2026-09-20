@@ -1,8 +1,10 @@
-https://github.com/user-attachments/assets/086798df-3b80-4133-9bff-fbf0672e4feb
-
 # XafRagSQL — RAG Sample for DevExpress XAF on SQL Server 2025
 
+![RAG Chat answering from the knowledge base](docs/ragchat-sqlserver.png)
+*RAG Chat answering from an ingested article — retrieved via `VECTOR_DISTANCE` over a native SQL Server 2025 `VECTOR(1536)` column.*
+
 ![Architecture Diagram](docs/architecture.png)
+*How the pieces fit. `docs/architecture.html` is the same diagram as an interactive page — clone and open it in a browser for guided views, search and relationship tracing (GitHub shows it as source, not a page).*
 
 XafRagSQL is a tutorial and reference implementation showing how to add Retrieval-Augmented Generation (RAG) to a [DevExpress XAF](https://www.devexpress.com/products/net/application_framework/) Blazor Server application. It stores and queries vector embeddings in **SQL Server 2025's native `VECTOR` type** through EF Core 10's built-in support, uses OpenAI to generate embeddings and LLM responses, and the DevExpress `DxAIChat` component for a polished in-app chat interface — all wired together through `Microsoft.Extensions.AI` abstractions.
 
@@ -14,8 +16,8 @@ XafRagSQL is a tutorial and reference implementation showing how to add Retrieva
 
 | Layer | Technology |
 |---|---|
-| Framework | .NET 10, DevExpress XAF 26.1.3 |
-| UI | Blazor Server, DevExpress DxAIChat 26.1.3 |
+| Framework | .NET 10, DevExpress XAF 26.1.4 |
+| UI | Blazor Server, DevExpress DxAIChat 26.1.4 |
 | ORM | EF Core 10 |
 | Vector store | SQL Server 2025 native `VECTOR(1536)` (EF Core 10 `SqlVector<float>`) |
 | AI | OpenAI `text-embedding-3-small` (embeddings), `gpt-4o` (chat) |
@@ -30,7 +32,7 @@ XafRagSQL is a tutorial and reference implementation showing how to add Retrieva
 - [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (for SQL Server 2025)
 - **SQL Server 2025 or later is required** — the `VECTOR` type does not exist in earlier versions and there is no downgrade path
-- DevExpress license (26.1.x) with the DevExpress NuGet feed configured
+- DevExpress license (26.1.4 or later in the 26.1 line) with the DevExpress NuGet feed configured
 - OpenAI API key
 
 ---

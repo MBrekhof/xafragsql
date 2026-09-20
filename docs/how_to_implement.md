@@ -8,7 +8,7 @@ For the complete source code of every file mentioned here, refer to this reposit
 
 ## Prerequisites
 
-- .NET 10 SDK with a working XAF Blazor Server project (DevExpress 26.1.x)
+- .NET 10 SDK with a working XAF Blazor Server project (DevExpress 26.1.4 or later in the 26.1 line)
 - Docker (for SQL Server 2025)
 - **SQL Server 2025 (v17) or later.** The `VECTOR` type does not exist in SQL Server 2022 or earlier and there is no downgrade path. Check with `SELECT @@VERSION` before you start.
 - An OpenAI API key
@@ -71,8 +71,8 @@ transitively — you do not need to reference it explicitly.
 <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.12" />
 <PackageReference Include="Microsoft.Extensions.AI" Version="10.8.0" />
 <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.8.0" />
-<PackageReference Include="DevExpress.AIIntegration.Blazor.Chat" Version="26.1.3" />
-<PackageReference Include="DevExpress.Document.Processor" Version="26.1.3" />
+<PackageReference Include="DevExpress.AIIntegration.Blazor.Chat" Version="26.1.4" />
+<PackageReference Include="DevExpress.Document.Processor" Version="26.1.4" />
 <PackageReference Include="Markdig" Version="1.3.2" />
 <PackageReference Include="HtmlSanitizer" Version="9.0.892" />
 <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
@@ -761,10 +761,22 @@ XAF generates a ListView for `RagChatHolder` by default. Do not use `Frame.SetVi
 
 ### `EnsureCreated()` silently skips the chunks table
 
-Covered in Step 8, and worth repeating because it fails quietly rather than loudly: use
-`Migrate()`. With `EnsureCreated()`, any flow where XAF builds the schema first leaves
-`knowledge_chunks` permanently absent, and the only symptom is a RAG chat that always answers
-"no relevant context found".
+Covered in Step 8, and worth repeating: use `Migrate()`. With `EnsureCreated()`, any flow where
+XAF builds the schema first leaves `knowledge_chunks` permanently absent. The failure is quiet at
+*creation* time - nothing complains during startup - but loud at *use* time: the first search
+throws a database exception for the missing object. `SearchAsync` does not catch it, so it
+surfaces as an error in the chat, not as an empty result. If you see "no relevant context found"
+instead, your table exists and the problem is elsewhere (embeddings never written, or a distance
+threshold that excludes everything).
+
+### Adopting a database that already has `knowledge_chunks`
+
+If you previously created the table with `EnsureCreated()` and are switching to migrations, the
+database has the table but no `__EFMigrationsHistory` row for it. `Migrate()` then considers the
+initial migration unapplied and tries to `CREATE TABLE` something that already exists, and startup
+fails. Baseline it instead: insert the migration's id into `__EFMigrationsHistory` so EF treats it
+as already applied. Microsoft documents that moving from `EnsureCreated()` to migrations is not
+seamless.
 
 ### `sys.columns` reports the vector column as `varbinary`
 
@@ -781,8 +793,9 @@ WHERE c.object_id = OBJECT_ID('knowledge_chunks');
 
 ### Vector column limitations
 
-`vector` columns support no constraints, no Always Encrypted, no memory-optimized tables and no
-conversions beyond text/JSON. Plan the schema accordingly.
+`vector` columns take `NULL` / `NOT NULL`, but no other constraints - no keys, no defaults, no
+check constraints - and no Always Encrypted, no memory-optimized tables, and no conversions beyond
+text/JSON. Plan the schema accordingly.
 
 ### Exact kNN scans every row
 

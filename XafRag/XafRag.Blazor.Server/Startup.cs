@@ -303,8 +303,13 @@ namespace XafRag.Blazor.Server
                 // and KnowledgeArticles later, so the migration would run before its target
                 // exists and then never re-run. So it stays a guarded, idempotent startup step -
                 // on a brand-new database the FKs are added on the next start. Existing orphans
-                // are removed first, the constraint would fail otherwise.
+                // are removed first, the constraint would fail otherwise. The whole script runs in
+                // one transaction: T-SQL BEGIN/END only groups statements, it does not make them
+                // atomic, and the PL/pgSQL DO block this replaces was implicitly transactional.
                 ragDb.Database.ExecuteSqlRaw("""
+                    SET XACT_ABORT ON;
+                    BEGIN TRANSACTION;
+
                     IF OBJECT_ID('[Documents]', 'U') IS NOT NULL
                        AND OBJECT_ID('[knowledge_chunks]', 'U') IS NOT NULL
                        AND NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = 'fk_knowledge_chunks_document')
@@ -326,6 +331,8 @@ namespace XafRag.Blazor.Server
                         ALTER TABLE knowledge_chunks ADD CONSTRAINT fk_knowledge_chunks_article
                           FOREIGN KEY (knowledge_article_id) REFERENCES [KnowledgeArticles]([Id]) ON DELETE CASCADE;
                     END;
+
+                    COMMIT;
                     """);
             }
             app.UseEndpoints(endpoints =>

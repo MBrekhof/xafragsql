@@ -55,15 +55,28 @@ public class RagService
         _logger = logger;
     }
 
-    // SQL Server has no array parameter equivalent to Postgres ANY(), so each id is bound as its
-    // own parameter. The SQL is assembled as a plain string rather than an interpolated literal,
-    // which keeps the values parameterised instead of concatenated in.
-    private static (string Sql, object[] Parameters) InClause(string selectUpToColumn, List<int> ids)
+    // SQL Server allows at most 2100 parameters per command, and Postgres's ANY(array) - which the
+    // pgvector version used - has no equivalent here. Look the ids up in batches so a large
+    // MaxResults cannot turn a successful vector search into a failed name lookup.
+    private const int IdBatchSize = 1000;
+
+    private async Task<Dictionary<int, string>> ResolveNamesAsync(
+        string selectUpToColumn, List<int> ids, CancellationToken ct)
     {
-        var names = ids.Select((_, i) => "@id" + i).ToArray();
-        var sql = selectUpToColumn + "IN (" + string.Join(",", names) + ")";
-        var parameters = ids.Select((id, i) => (object)new SqlParameter(names[i], id)).ToArray();
-        return (sql, parameters);
+        var names = new Dictionary<int, string>();
+        foreach (var batch in ids.Chunk(IdBatchSize))
+        {
+            var paramNames = batch.Select((_, i) => "@id" + i).ToArray();
+            var sql = selectUpToColumn + "IN (" + string.Join(",", paramNames) + ")";
+            var parameters = batch.Select((id, i) => (object)new SqlParameter(paramNames[i], id)).ToArray();
+
+            var rows = await _ragDb.Database.SqlQueryRaw<SourceNameRow>(sql, parameters).ToListAsync(ct);
+            foreach (var r in rows)
+            {
+                names[r.Id] = r.Name;
+            }
+        }
+        return names;
     }
 
     public async Task<List<SearchResult>> SearchAsync(string query, CancellationToken ct = default)
@@ -91,21 +104,11 @@ public class RagService
         var articleIds = results.Where(r => r.SourceType == ChunkSourceType.Article && r.KnowledgeArticleId.HasValue)
             .Select(r => r.KnowledgeArticleId!.Value).Distinct().ToList();
 
-        var docNames = new Dictionary<int, string>();
-        if (docIds.Count > 0)
-        {
-            var (sql, ps) = InClause("""SELECT "Id", "FileName" AS "Name" FROM "Documents" WHERE "Id" """, docIds);
-            docNames = await _ragDb.Database.SqlQueryRaw<SourceNameRow>(sql, ps)
-                .ToDictionaryAsync(r => r.Id, r => r.Name, ct);
-        }
+        var docNames = await ResolveNamesAsync(
+            """SELECT "Id", "FileName" AS "Name" FROM "Documents" WHERE "Id" """, docIds, ct);
 
-        var articleNames = new Dictionary<int, string>();
-        if (articleIds.Count > 0)
-        {
-            var (sql, ps) = InClause("""SELECT "Id", "Title" AS "Name" FROM "KnowledgeArticles" WHERE "Id" """, articleIds);
-            articleNames = await _ragDb.Database.SqlQueryRaw<SourceNameRow>(sql, ps)
-                .ToDictionaryAsync(r => r.Id, r => r.Name, ct);
-        }
+        var articleNames = await ResolveNamesAsync(
+            """SELECT "Id", "Title" AS "Name" FROM "KnowledgeArticles" WHERE "Id" """, articleIds, ct);
 
         foreach (var r in results)
         {
