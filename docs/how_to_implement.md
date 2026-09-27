@@ -327,7 +327,7 @@ return extension switch
 
 Combines vector search with LLM chat. Key features:
 
-- **Source name resolution**: after the vector search, the service queries the `Documents` and `KnowledgeArticles` tables to resolve actual filenames/titles. Those tables belong to XAF's `DbContext`, not `RagDbContext`, so there is no query root to join against — the lookup is raw SQL. Bind each id as its own parameter (`WHERE [Id] IN (@id0, @id1, ...)`); SQL Server has no array parameter equivalent to Postgres `ANY()`
+- **Security filter + source names**: see "Retrieval must go through XAF security" below — the parents are loaded through a secured Object Space, which also supplies the filenames/titles
 - **Context formatting**: chunks are labeled as `**[Part N of "filename.md"]**` so the LLM can cite sources with bold references
 - **Streaming**: `AskAsync` returns `IAsyncEnumerable<string>` for token-by-token rendering
 
@@ -344,7 +344,7 @@ var results = await _ragDb.KnowledgeChunks
     })
     .Where(r => r.Distance <= _options.DistanceThreshold)
     .OrderBy(r => r.Distance)
-    .Take(_options.MaxResults)
+    .Take(_options.MaxResults * 4) // over-fetch: the security filter below removes some
     .ToListAsync(ct);
 ```
 
@@ -363,6 +363,44 @@ This is an **exact kNN scan over every row**. That is a deliberate choice: SQL S
 `VECTOR_SEARCH()` and vector indexes are experimental and their EF Core APIs are documented as
 subject to change. When row counts justify it, add `HasVectorIndex()` to the model and switch to
 `VectorSearch(...).OrderBy(r => r.Distance).Take(n).WithApproximate()`.
+
+#### Retrieval must go through XAF security
+
+`knowledge_chunks` sits outside XAF, and chunk text is copied into the prompt verbatim. Query it
+directly and every user can get any document's content paraphrased back to them, whatever their
+roles say. So over-fetch candidates, then keep only those whose parent the **current user** may
+read, using the secured Object Space that XAF puts in DI (`IObjectSpaceFactory`, scoped to the
+Blazor circuit's user) and the security strategy (`ISecurityProvider`):
+
+```csharp
+var security = (IRequestSecurityStrategy)_securityProvider.GetSecurity();
+using var os = _objectSpaceFactory.CreateObjectSpace<KnowledgeArticle>();
+
+// Type and object permissions (criteria included) are applied inside this query.
+var articles = await os.GetObjectsQuery<KnowledgeArticle>()
+    .Where(a => articleIds.Contains(a.Id)).ToListAsync(ct);
+
+foreach (var a in articles)
+{
+    // Member permissions: the chunk text *is* Content, so the object being readable is not enough.
+    if (security.CanRead(typeof(KnowledgeArticle), os, a.Id, nameof(KnowledgeArticle.Content)))
+        readable[(ChunkSourceType.Article, a.Id)] = a.Title;
+}
+```
+
+For documents the text comes from `Document.FileData` and then that `FileData` object's `Content`,
+so check both. Drop chunks with no parent. Fetch more candidates than you need
+(`MaxResults * 4` in the sample), because filtering happens after ranking. A user who may read
+only a few of the nearest chunks gets fewer results. The complete version, including source names
+the user may not read, is `RagService.SearchAsync`.
+
+Two things that look like they would work but don't:
+
+- **Filtering by name through raw SQL** (the original sample did this) bypasses XAF security as
+  well. Any lookup on `Documents` / `KnowledgeArticles` must go through the secured Object Space.
+- **Checking that the model's answer omits the secret** doesn't prove anything. The model can
+  leave a leaked chunk out of one answer and use it in the next. Assert on what went *into* the
+  prompt: the sample logs the kept sources, and its test checks that log line.
 
 ```csharp
 var contextText = searchResults.Count > 0
@@ -735,6 +773,22 @@ defaultRole.AddTypePermissionsRecursively<KnowledgeArticle>(
 defaultRole.AddTypePermissionsRecursively<Document>(
     SecurityOperations.CRUDAccess, SecurityPermissionState.Allow);
 ```
+
+Because retrieval goes through the secured Object Space (see RagService above), narrower
+permissions carry straight through to RAG. The sample's `Readers` role:
+
+```csharp
+role.AddObjectPermission<KnowledgeArticle>(SecurityOperations.Read,
+    "[Tags] Like '%public%'", SecurityPermissionState.Allow);
+role.AddMemberPermission<KnowledgeArticle>(SecurityOperations.Read,
+    nameof(KnowledgeArticle.Content), "[Tags] Like '%nocontent%'", SecurityPermissionState.Deny);
+role.AddTypePermissionsRecursively<RagChatHolder>(SecurityOperations.Read, SecurityPermissionState.Allow);
+role.AddNavigationPermission(@"Application/NavigationItems/Items/Knowledge Base/Items/RagChatHolder_ListView",
+    SecurityPermissionState.Allow);
+```
+
+Grant the object permission on its own, not together with a type-level Read. Roles are merged
+"granted in any role", so an unconditional Read anywhere cancels the criterion.
 
 ---
 

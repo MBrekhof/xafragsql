@@ -76,7 +76,7 @@ XafRagSQL is a tutorial and reference implementation showing how to add Retrieva
 
 5. **Log in**
 
-   Open `https://localhost:5001` and log in as **Admin** with an empty password.
+   Open `https://localhost:5001` and log in as **Admin** with an empty password. A second user, **Reader** (also an empty password), shows the security model at work: see [Security](#security).
 
 6. **Add knowledge**
 
@@ -209,12 +209,24 @@ When the user sends a message in the RAG Chat:
 ```
 User question
   → EmbeddingService           — embed the question (same model)
-  → RagDbContext               — cosine distance search via VECTOR_DISTANCE, top 5 under threshold
-  → Source resolution           — resolve document filenames / article titles
+  → RagDbContext               — cosine distance search via VECTOR_DISTANCE, top 20 candidates under threshold
+  → Security filter            — keep only chunks whose article/document the user may read, top 5
   → RagService                 — build system prompt: "[Part N of "filename.md"] chunk text..."
   → OpenAI gpt-4o              — streaming chat response
   → DxAIChat                   — render the Markdown answer in the browser
 ```
+
+### Security
+
+The chunks live in `RagDbContext`, outside XAF, so nothing there knows who is asking. Chunk text goes into the prompt verbatim, so a chunk from a document the user may not open would be paraphrased right back to them. `RagService.SearchAsync` therefore sends every candidate through XAF's security system before it reaches the prompt:
+
+- the parent `KnowledgeArticle` / `Document` rows are loaded through a **secured Object Space** (`IObjectSpaceFactory`), so type and object permissions (criteria included) apply;
+- the member the chunk text came from is checked too (`KnowledgeArticle.Content`, `Document.FileData` → `FileData.Content`), so member permissions apply as well;
+- chunks without a parent are dropped, and the source name is shown only if the user may read it.
+
+To see it, log in as **Reader**. The `Readers` role may read only articles whose Tags contain `public`, cannot see those articles' Content when the Tags also contain `nocontent`, and has no access to Documents. RAG Chat answers Reader from those articles only.
+
+The filter runs after the vector search: 4 × `MaxResults` candidates are fetched and the first `MaxResults` readable ones are kept. A user who may read only a small share of the nearest chunks can get fewer than `MaxResults` results. If that matters, push the readable parent ids into the vector query instead.
 
 ---
 
@@ -261,6 +273,7 @@ Serilog writes to both the console and rolling log files at `logs/xafrag-YYYY-MM
 | `Login_ShowsMainWindow` | Admin can log in | none |
 | `RagChat_Renders_LightAndDark` | RAG Chat renders; screenshots in light and dark mode | none |
 | `Article_IsIngested_AndAnsweredFromRetrieval` | 11 articles are ingested with 1536-dim embeddings, and the chat answers a question using a made-up fact that only one of them contains | embeddings + one chat |
+| `Retrieval_RespectsObjectAndMemberPermissions` | Reader gets answers from a `public` article, but neither an untagged one (object permission) nor one whose Content is hidden (member permission) reaches Reader's prompt. Checked on the server's search log, not only on the answer | embeddings + six chats |
 
 ```bash
 docker compose up -d

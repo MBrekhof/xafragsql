@@ -59,6 +59,13 @@ public class AppHost
         Assert.That(IsPortFree(Config.Port), Is.True, $"Server still holds port {Config.Port} after shutdown");
     }
 
+    /// <summary>The server output so far. The log stays open for writing while the server runs.</summary>
+    public static string ReadLog()
+    {
+        using var fs = new FileStream(LogPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        return new StreamReader(fs).ReadToEnd();
+    }
+
     static Process Start(string exe, params string[] args)
     {
         var psi = new ProcessStartInfo(exe)

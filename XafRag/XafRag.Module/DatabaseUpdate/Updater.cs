@@ -36,6 +36,7 @@ namespace XafRag.Module.DatabaseUpdate
             // If a role doesn't exist in the database, create this role
             var defaultRole = CreateDefaultRole();
             var adminRole = CreateAdminRole();
+            var readersRole = CreateReadersRole();
 
             ObjectSpace.CommitChanges(); //This line persists created object(s).
 
@@ -65,6 +66,17 @@ namespace XafRag.Module.DatabaseUpdate
                 });
             }
 
+            // Demonstrates that RAG answers respect XAF security: Reader's chat only draws on
+            // articles Reader is allowed to read (see CreateReadersRole).
+            if (userManager.FindUserByName<ApplicationUser>(ObjectSpace, "Reader") == null)
+            {
+                string EmptyPassword = "";
+                _ = userManager.CreateUser<ApplicationUser>(ObjectSpace, "Reader", EmptyPassword, (user) =>
+                {
+                    user.Roles.Add(readersRole);
+                });
+            }
+
             ObjectSpace.CommitChanges(); //This line persists created object(s).
 #endif
         }
@@ -82,6 +94,32 @@ namespace XafRag.Module.DatabaseUpdate
                 adminRole.IsAdministrative = true;
             }
             return adminRole;
+        }
+        // Read-only access to articles whose Tags contain "public", and no access to Documents.
+        // Articles tagged "nocontent" can be opened but their Content is hidden, so RAG must not
+        // use their chunks either.
+        PermissionPolicyRole CreateReadersRole()
+        {
+            PermissionPolicyRole role = ObjectSpace.FirstOrDefault<PermissionPolicyRole>(r => r.Name == "Readers");
+            if (role == null)
+            {
+                role = ObjectSpace.CreateObject<PermissionPolicyRole>();
+                role.Name = "Readers";
+
+                role.AddObjectPermissionFromLambda<ApplicationUser>(SecurityOperations.Read, cm => cm.ID == (Guid)CurrentUserIdOperator.CurrentUserId(), SecurityPermissionState.Allow);
+                role.AddTypePermissionsRecursively<PermissionPolicyRole>(SecurityOperations.Read, SecurityPermissionState.Deny);
+                role.AddObjectPermission<ModelDifference>(SecurityOperations.ReadWriteAccess, "UserId = ToStr(CurrentUserId())", SecurityPermissionState.Allow);
+                role.AddObjectPermission<ModelDifferenceAspect>(SecurityOperations.ReadWriteAccess, "Owner.UserId = ToStr(CurrentUserId())", SecurityPermissionState.Allow);
+                role.AddTypePermissionsRecursively<ModelDifference>(SecurityOperations.Create, SecurityPermissionState.Allow);
+                role.AddTypePermissionsRecursively<ModelDifferenceAspect>(SecurityOperations.Create, SecurityPermissionState.Allow);
+
+                role.AddObjectPermission<KnowledgeArticle>(SecurityOperations.Read, "[Tags] Like '%public%'", SecurityPermissionState.Allow);
+                role.AddMemberPermission<KnowledgeArticle>(SecurityOperations.Read, nameof(KnowledgeArticle.Content), "[Tags] Like '%nocontent%'", SecurityPermissionState.Deny);
+                role.AddTypePermissionsRecursively<RagChatHolder>(SecurityOperations.Read, SecurityPermissionState.Allow);
+                role.AddNavigationPermission(@"Application/NavigationItems/Items/Knowledge Base/Items/KnowledgeArticle_ListView", SecurityPermissionState.Allow);
+                role.AddNavigationPermission(@"Application/NavigationItems/Items/Knowledge Base/Items/RagChatHolder_ListView", SecurityPermissionState.Allow);
+            }
+            return role;
         }
         PermissionPolicyRole CreateDefaultRole()
         {

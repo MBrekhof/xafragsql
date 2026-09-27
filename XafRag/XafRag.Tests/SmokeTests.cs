@@ -17,18 +17,22 @@ public class SmokeTests : PageTest
         ViewportSize = new() { Width = 1600, Height = 1000 },
     };
 
-    ILocator KnowledgeBaseGroup => Page.GetByRole(AriaRole.Application, new() { Name = "Knowledge Base" });
-
     [SetUp]
-    public async Task LogInAsync()
+    public Task LogInAsAdminAsync() => LogInAsync(Page, "Admin");
+
+    async Task LogInAsync(IPage page, string user)
     {
-        Page.SetDefaultTimeout(30_000);
-        await Page.GotoAsync(AppHost.BaseUrl, new() { WaitUntil = WaitUntilState.DOMContentLoaded });
-        await Page.GetByRole(AriaRole.Textbox, new() { Name = "User Name" }).FillAsync("Admin");
-        await Page.GetByRole(AriaRole.Button, new() { Name = "Log In" }).ClickAsync();
+        page.SetDefaultTimeout(30_000);
+        await page.GotoAsync(AppHost.BaseUrl, new() { WaitUntil = WaitUntilState.DOMContentLoaded });
+        await page.GetByRole(AriaRole.Textbox, new() { Name = "User Name" }).FillAsync(user);
+        await page.GetByRole(AriaRole.Button, new() { Name = "Log In" }).ClickAsync();
         // The navigation pane only renders once the circuit is up and the user is signed in.
-        await Expect(KnowledgeBaseGroup).ToBeVisibleAsync();
+        // Expect has its own 5 s default; the first login after a cold start takes longer.
+        await Expect(KnowledgeBaseGroup(page)).ToBeVisibleAsync(new() { Timeout = 30_000 });
     }
+
+    static ILocator KnowledgeBaseGroup(IPage page) =>
+        page.GetByRole(AriaRole.Application, new() { Name = "Knowledge Base" });
 
     [TearDown]
     public async Task ScreenshotOnFailureAsync()
@@ -46,7 +50,7 @@ public class SmokeTests : PageTest
     [Test]
     public async Task RagChat_Renders_LightAndDark()
     {
-        await OpenAsync("RAG Chat");
+        await OpenAsync(Page, "RAG Chat");
         await Expect(Page.Locator(".rag-chat-empty h3")).ToHaveTextAsync("Knowledge Base Assistant");
 
         try
@@ -77,19 +81,8 @@ public class SmokeTests : PageTest
         // Rag:MaxResults (5), a search that stopped ranking by distance would return low ids and miss it.
         var target = articles[^1];
 
-        await OpenAsync("Knowledge Article");
-        await Page.GetByRole(AriaRole.Button, new() { Name = "New" }).ClickAsync();
-        var title = Page.GetByRole(AriaRole.Textbox, new() { Name = "Title" });
-        var content = Page.GetByRole(AriaRole.Textbox, new() { Name = "Content" });
-        foreach (var a in articles)
-        {
-            await Expect(title).ToBeEmptyAsync();
-            await title.FillAsync(a.Title);
-            await content.FillAsync($"Project {a.Project} has the codename {a.Codename}.");
-            var last = a == target;
-            await Page.GetByRole(AriaRole.Button, new() { Name = last ? "Save" : "Save and New", Exact = true }).ClickAsync();
-        }
-        await Expect(Page.GetByRole(AriaRole.Button, new() { Name = "Delete" })).ToBeEnabledAsync();
+        await CreateArticlesAsync(articles.Select(a =>
+            (a.Title, $"Project {a.Project} has the codename {a.Codename}.", (string?)null)).ToList());
 
         var chunks = await WaitForChunksAsync(articles.Select(a => a.Title).ToArray());
         var targetChunks = chunks.Where(c => c.Title == target.Title).ToList();
@@ -99,15 +92,111 @@ public class SmokeTests : PageTest
         // vector(1536): 1536 float32 values + an 8-byte header.
         Assert.That(chunks.Select(c => c.EmbeddingBytes), Is.All.EqualTo(6152), "embedding missing or wrong size");
 
-        await OpenAsync("RAG Chat");
-        var input = Page.Locator(".rag-chat textarea");
-        await input.FillAsync($"What is the codename of project {target.Project}?");
-        await input.PressAsync("Enter");
-
-        var reply = Page.Locator(".dxbl-chatui-message-assistant, .dxbl-chatui-message-error").Last;
-        await Expect(reply).ToBeVisibleAsync(new() { Timeout = 90_000 });
-        await Expect(Page.Locator(".dxbl-chatui-message-error")).ToHaveCountAsync(0);
+        await OpenAsync(Page, "RAG Chat");
+        var reply = await AskAsync(Page, $"What is the codename of project {target.Project}?");
         await Expect(reply).ToContainTextAsync(target.Codename);
+    }
+
+    [Test]
+    [Category("OpenAI")]
+    public async Task Retrieval_RespectsObjectAndMemberPermissions()
+    {
+        // Reader (seeded by Updater) may read articles whose Tags contain "public", but not the
+        // Content of those also tagged "nocontent". Retrieval must follow the same rules.
+        var run = Guid.NewGuid().ToString("N")[..6];
+        string Code() => Guid.NewGuid().ToString("N")[..6];
+        var open = (Title: $"Sec {run} Open", Project: $"Aurora-{run}", Codename: $"Opal-{Code()}", Tags: (string?)"public");
+        var secret = (Title: $"Sec {run} Secret", Project: $"Borealis-{run}", Codename: $"Onyx-{Code()}", Tags: (string?)null);
+        var masked = (Title: $"Sec {run} Masked", Project: $"Cygnus-{run}", Codename: $"Jade-{Code()}", Tags: (string?)"public nocontent");
+        var all = new[] { open, secret, masked };
+
+        await CreateArticlesAsync(all.Select(a =>
+            (a.Title, $"Project {a.Project} has the codename {a.Codename}.", a.Tags)).ToList());
+        await WaitForChunksAsync(all.Select(a => a.Title).ToArray());
+
+        // Control: all three are retrievable, so a missing answer for Reader below is the filter.
+        await OpenAsync(Page, "RAG Chat");
+        foreach (var a in all)
+            await Expect(await AskAsync(Page, $"What is the codename of project {a.Project}?")).ToContainTextAsync(a.Codename);
+
+        await using var readerContext = await Browser.NewContextAsync(ContextOptions());
+        var reader = await readerContext.NewPageAsync();
+        try
+        {
+        await LogInAsync(reader, "Reader");
+        // Reader can open Masked (only its Content is hidden), so excluding it below is the member
+        // check at work, not the object check.
+        await OpenAsync(reader, "Knowledge Article");
+        await Expect(reader.GetByText(open.Title, new() { Exact = true })).ToBeVisibleAsync();
+        await Expect(reader.GetByText(masked.Title, new() { Exact = true })).ToBeVisibleAsync();
+        await Expect(reader.GetByText(secret.Title, new() { Exact = true })).ToHaveCountAsync(0);
+        await OpenAsync(reader, "RAG Chat");
+
+        await Expect(await AskAsync(reader, $"What is the codename of project {open.Project}?")).ToContainTextAsync(open.Codename);
+        foreach (var hidden in new[] { secret, masked })
+        {
+            var question = $"What is the codename of project {hidden.Project}?";
+            var reply = await AskAsync(reader, question);
+            await Expect(reply).Not.ToContainTextAsync(hidden.Codename);
+            // The answer not mentioning it is not enough: it must not have reached the prompt.
+            // The same question was asked once by Admin above; Reader's search is the second line.
+            // Server output reaches the log asynchronously, so wait for it.
+            string[] lines = [];
+            for (var i = 0; i < 20; i++)
+            {
+                lines = AppHost.ReadLog().Split('\n').Where(l => l.Contains($"RAG search for '{question}'")).ToArray();
+                if (lines.Length >= 2) break;
+                await Task.Delay(500);
+            }
+            Assert.That(lines, Has.Length.EqualTo(2), "Reader's search was not logged");
+            // Exact, not "does not contain the title": Reader may read only the Open article (the
+            // other tests' articles are untagged), so anything else in the prompt is a leak.
+            Assert.That(lines[1].TrimEnd(), Does.EndWith($"returned 1 results: {open.Title}"), "a hidden article reached the prompt");
+        }
+        }
+        catch
+        {
+            await ScreenshotAsync("reader", reader);
+            throw;
+        }
+    }
+
+    /// <summary>Sends a question and returns the reply bubble; fails on an error bubble.</summary>
+    async Task<ILocator> AskAsync(IPage page, string question)
+    {
+        var replies = page.Locator(".dxbl-chatui-message-assistant, .dxbl-chatui-message-error");
+        var before = await replies.CountAsync();
+        var input = page.Locator(".rag-chat textarea");
+        await input.FillAsync(question);
+        // Click rather than Enter: Send enables only once the typed text has reached the server.
+        await page.Locator(".rag-chat button[title=Send]").ClickAsync();
+
+        // The "Searching knowledge base..." indicator is itself an assistant bubble: wait for it to
+        // appear and go again, or the caller asserts on the placeholder instead of the answer.
+        var loading = page.Locator(".rag-chat").GetByText("Searching knowledge base...");
+        await Expect(replies).ToHaveCountAsync(before + 1, new() { Timeout = 90_000 });
+        await Expect(loading).ToHaveCountAsync(0, new() { Timeout = 90_000 });
+        await Expect(replies).ToHaveCountAsync(before + 1);
+        await Expect(page.Locator(".dxbl-chatui-message-error")).ToHaveCountAsync(0);
+        return replies.Last;
+    }
+
+    async Task CreateArticlesAsync(List<(string Title, string Content, string? Tags)> articles)
+    {
+        await OpenAsync(Page, "Knowledge Article");
+        await Page.GetByRole(AriaRole.Button, new() { Name = "New" }).ClickAsync();
+        var title = Page.GetByRole(AriaRole.Textbox, new() { Name = "Title" });
+        for (var i = 0; i < articles.Count; i++)
+        {
+            await Expect(title).ToBeEmptyAsync();
+            await title.FillAsync(articles[i].Title);
+            await Page.GetByRole(AriaRole.Textbox, new() { Name = "Content" }).FillAsync(articles[i].Content);
+            if (articles[i].Tags is { } tags)
+                await Page.GetByRole(AriaRole.Textbox, new() { Name = "Tags" }).FillAsync(tags);
+            var last = i == articles.Count - 1;
+            await Page.GetByRole(AriaRole.Button, new() { Name = last ? "Save" : "Save and New", Exact = true }).ClickAsync();
+        }
+        await Expect(Page.GetByRole(AriaRole.Button, new() { Name = "Delete" })).ToBeEnabledAsync();
     }
 
     record Chunk(string Title, string Content, long EmbeddingBytes);
@@ -141,11 +230,11 @@ public class SmokeTests : PageTest
         }
     }
 
-    async Task OpenAsync(string navItem)
+    static async Task OpenAsync(IPage page, string navItem)
     {
-        var item = Page.GetByRole(AriaRole.Treeitem, new() { Name = navItem, Exact = true });
+        var item = page.GetByRole(AriaRole.Treeitem, new() { Name = navItem, Exact = true });
         if (!await item.IsVisibleAsync())
-            await KnowledgeBaseGroup.ClickAsync();
+            await KnowledgeBaseGroup(page).ClickAsync();
         await item.ClickAsync();
     }
 
@@ -165,12 +254,12 @@ public class SmokeTests : PageTest
             $"() => document.querySelector(\"link[href*='/{mode}.min.css']\")?.sheet != null");
     }
 
-    async Task ScreenshotAsync(string suffix)
+    async Task ScreenshotAsync(string suffix, IPage? page = null)
     {
         var path = Path.Combine(TestContext.CurrentContext.WorkDirectory, "screenshots",
             $"{TestContext.CurrentContext.Test.Name}_{suffix}.png");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        await Page.ScreenshotAsync(new() { Path = path, FullPage = true, Animations = ScreenshotAnimations.Disabled });
+        await (page ?? Page).ScreenshotAsync(new() { Path = path, FullPage = true, Animations = ScreenshotAnimations.Disabled });
         TestContext.AddTestAttachment(path);
     }
 }
