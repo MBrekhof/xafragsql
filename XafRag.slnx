@@ -6,5 +6,6 @@
   </Configurations>
   <Project Path="XafRag/XafRag.Blazor.Server/XafRag.Blazor.Server.csproj" />
   <Project Path="XafRag/XafRag.Module/XafRag.Module.csproj" />
+  <Project Path="XafRag/XafRag.RerankEval/XafRag.RerankEval.csproj" />
   <Project Path="XafRag/XafRag.Tests/XafRag.Tests.csproj" />
 </Solution>

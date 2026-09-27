@@ -29,6 +29,13 @@ namespace XafRag.Module.DatabaseUpdate
             //    theObject.Name = name;
             //}
 
+            // Application configuration, not demo data: exactly one row, rerank off until an admin enables it.
+            if (!ObjectSpace.GetObjectsQuery<RerankSettings>().Any())
+            {
+                ObjectSpace.CreateObject<RerankSettings>();
+                ObjectSpace.CommitChanges();
+            }
+
             // The code below creates users and roles for testing purposes only.
             // In production code, you can create users and assign roles to them automatically, as described in the following help topic:
             // https://docs.devexpress.com/eXpressAppFramework/119064/data-security-and-safety/security-system/authentication

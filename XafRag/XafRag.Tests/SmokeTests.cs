@@ -161,6 +161,114 @@ public class SmokeTests : PageTest
         }
     }
 
+    [Test]
+    public async Task RerankSettings_StoresKey_NeverShown_AdminOnly()
+    {
+        const string dummy = "ts-dummy-PLAINTEXT-4711";
+        try
+        {
+            await OpenRerankSettingsAsync();
+            await SetApiKeyAsync(dummy);
+
+            var stored = await QueryScalarAsync("SELECT TOP 1 ApiKey FROM RerankSettings ORDER BY Id") as string;
+            Assert.That(stored, Is.EqualTo(dummy), "key not stored");
+            Assert.That(AppHost.ReadLog(), Does.Not.Contain(dummy), "key written to the server log");
+            await Expect(Page.GetByText(dummy)).ToHaveCountAsync(0);
+
+            await using var readerContext = await Browser.NewContextAsync(ContextOptions());
+            var reader = await readerContext.NewPageAsync();
+            await LogInAsync(reader, "Reader");
+            await ExpandKnowledgeBaseAsync(reader);
+            await Expect(reader.GetByRole(AriaRole.Treeitem, new() { Name = "RAG Chat", Exact = true })).ToBeVisibleAsync();
+            await Expect(reader.GetByRole(AriaRole.Treeitem, new() { Name = "Rerank Settings", Exact = true })).ToHaveCountAsync(0);
+
+            // Single row: no New, Delete or Save and New for Admin either.
+            foreach (var hidden in new[] { "New", "Delete", "Save and New" })
+                await Expect(Page.GetByRole(AriaRole.Button, new() { Name = hidden, Exact = true })).ToHaveCountAsync(0);
+        }
+        finally
+        {
+            await ResetRerankSettingsAsync();
+        }
+    }
+
+    [Test]
+    [Category("OpenAI")]
+    public async Task Rerank_FailsOpen_WhenTypeSafeRejectsTheKey()
+    {
+        // More permitted candidates than MaxResults (5), so rerank actually runs; TypeSafe answers
+        // 401 to the dummy key, and the chat must still answer from the distance order.
+        var run = Guid.NewGuid().ToString("N")[..6];
+        var articles = Enumerable.Range(1, 7).Select(i => (
+            Title: $"Fail {run} {i}",
+            Project: $"Vesper{i}-{run}",
+            Codename: $"Quill{i}-{Guid.NewGuid().ToString("N")[..6]}")).ToList();
+        try
+        {
+            await OpenRerankSettingsAsync();
+            await Page.GetByRole(AriaRole.Checkbox, new() { Name = "Rerank with TypeSafe" }).CheckAsync();
+            await SetApiKeyAsync("ts-dummy-invalid-key");
+
+            await CreateArticlesAsync(articles.Select(a =>
+                (a.Title, $"Project {a.Project} has the codename {a.Codename}.", (string?)null)).ToList());
+            await WaitForChunksAsync(articles.Select(a => a.Title).ToArray());
+
+            var target = articles[3];
+            var question = $"What is the codename of project {target.Project}?";
+            await OpenAsync(Page, "RAG Chat");
+            await Expect(await AskAsync(Page, question)).ToContainTextAsync(target.Codename);
+
+            string? rerankLine = null;
+            for (var i = 0; i < 20 && rerankLine == null; i++)
+            {
+                rerankLine = AppHost.ReadLog().Split('\n').LastOrDefault(l => l.Contains($"RAG rerank for '{question}'"));
+                if (rerankLine == null) await Task.Delay(500);
+            }
+            // Exactly "failed" (the TypeSafe call), not "failed: settings" (never reached TypeSafe).
+            Assert.That(rerankLine?.TrimEnd(), Does.EndWith(": failed"), "rerank did not run, or did not fail on the invalid key");
+        }
+        finally
+        {
+            await ResetRerankSettingsAsync();
+        }
+    }
+
+    async Task OpenRerankSettingsAsync()
+    {
+        await OpenAsync(Page, "Rerank Settings");
+        // The single seeded row: the data row is the one with a selection checkbox.
+        await Page.GetByRole(AriaRole.Row)
+            .Filter(new() { Has = Page.GetByRole(AriaRole.Checkbox, new() { Name = "Check box not checked" }) })
+            .GetByRole(AriaRole.Gridcell).Nth(1).ClickAsync();
+        await Expect(Page.GetByRole(AriaRole.Button, new() { Name = "Set API Key" })).ToBeVisibleAsync();
+    }
+
+    async Task SetApiKeyAsync(string key)
+    {
+        await Page.GetByRole(AriaRole.Button, new() { Name = "Set API Key" }).ClickAsync();
+        var dialog = Page.GetByRole(AriaRole.Dialog, new() { Name = "TypeSafe API Key" });
+        await dialog.GetByRole(AriaRole.Textbox, new() { Name = "API key" }).FillAsync(key);
+        await dialog.GetByRole(AriaRole.Button, new() { Name = "OK" }).ClickAsync();
+        await Expect(dialog).ToHaveCountAsync(0);
+        // The action only changes the value; saving is the user's, as with any edit.
+        await Page.GetByRole(AriaRole.Button, new() { Name = "Save", Exact = true }).ClickAsync();
+        await Expect(Page.GetByRole(AriaRole.Button, new() { Name = "Save", Exact = true })).ToBeDisabledAsync();
+        await Expect(Page.GetByRole(AriaRole.Checkbox, new() { Name = "API key configured" })).ToBeCheckedAsync();
+    }
+
+    static Task ResetRerankSettingsAsync() =>
+        QueryScalarAsync("UPDATE RerankSettings SET Enabled = 0, ApiKey = NULL; SELECT @@ROWCOUNT");
+
+    static async Task<object?> QueryScalarAsync(string sql)
+    {
+        await using var conn = new SqlConnection(AppHost.TestDb);
+        await conn.OpenAsync();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        var value = await cmd.ExecuteScalarAsync();
+        return value is DBNull ? null : value;
+    }
+
     /// <summary>Sends a question and returns the reply bubble; fails on an error bubble.</summary>
     async Task<ILocator> AskAsync(IPage page, string question)
     {
@@ -230,12 +338,21 @@ public class SmokeTests : PageTest
         }
     }
 
-    static async Task OpenAsync(IPage page, string navItem)
+    // XAF remembers per user whether the group is expanded, so toggle only when it is collapsed;
+    // "item not visible yet" is not "collapsed" while the navigation is still rendering.
+    async Task ExpandKnowledgeBaseAsync(IPage page)
     {
-        var item = page.GetByRole(AriaRole.Treeitem, new() { Name = navItem, Exact = true });
-        if (!await item.IsVisibleAsync())
-            await KnowledgeBaseGroup(page).ClickAsync();
-        await item.ClickAsync();
+        var group = KnowledgeBaseGroup(page);
+        await Expect(group).ToBeVisibleAsync();
+        if (await group.GetAttributeAsync("aria-expanded") != "true")
+            await group.ClickAsync();
+        await Expect(group).ToHaveAttributeAsync("aria-expanded", "true");
+    }
+
+    async Task OpenAsync(IPage page, string navItem)
+    {
+        await ExpandKnowledgeBaseAsync(page);
+        await page.GetByRole(AriaRole.Treeitem, new() { Name = navItem, Exact = true }).ClickAsync();
     }
 
     async Task SetThemeModeAsync(string mode)

@@ -87,6 +87,7 @@ namespace XafRag.Blazor.Server
             services.AddScoped<DocumentProcessingService>();
             services.AddScoped<RagService>();
             services.AddSingleton<IngestionService>();
+            services.AddHttpClient<TypeSafeReranker>();
 
             services.AddSingleton(typeof(Microsoft.AspNetCore.SignalR.HubConnectionHandler<>), typeof(ProxyHubConnectionHandler<>));
 

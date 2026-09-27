@@ -4,6 +4,7 @@ using Microsoft.Extensions.Options;
 using DevExpress.ExpressApp;
 using DevExpress.ExpressApp.Security;
 using DevExpress.Persistent.BaseImpl.EF;
+using Microsoft.Data.SqlTypes;
 using XafRag.Blazor.Server.Configuration;
 using XafRag.Module.BusinessObjects;
 
@@ -29,6 +30,11 @@ public class RagService
     private readonly ILogger<RagService> _logger;
     private readonly IObjectSpaceFactory _objectSpaceFactory;
     private readonly ISecurityProvider _securityProvider;
+    private readonly INonSecuredObjectSpaceFactory _nonSecuredObjectSpaceFactory;
+    private readonly TypeSafeReranker _reranker;
+
+    // Rerank must never make the chat slow or broken: past this budget, keep the distance order.
+    public static readonly TimeSpan RerankBudget = TimeSpan.FromSeconds(5);
 
     private const string SystemPrompt = """
         You are a helpful knowledge base assistant. Use the provided context to answer the user's question.
@@ -45,7 +51,9 @@ public class RagService
         IOptions<RagOptions> options,
         ILogger<RagService> logger,
         IObjectSpaceFactory objectSpaceFactory,
-        ISecurityProvider securityProvider)
+        ISecurityProvider securityProvider,
+        INonSecuredObjectSpaceFactory nonSecuredObjectSpaceFactory,
+        TypeSafeReranker reranker)
     {
         _ragDb = ragDb;
         _embeddingService = embeddingService;
@@ -54,6 +62,8 @@ public class RagService
         _logger = logger;
         _objectSpaceFactory = objectSpaceFactory;
         _securityProvider = securityProvider;
+        _nonSecuredObjectSpaceFactory = nonSecuredObjectSpaceFactory;
+        _reranker = reranker;
     }
 
     // ponytail: over-fetch, then drop what the user may not read. If the user can read only a
@@ -65,7 +75,35 @@ public class RagService
     {
         var queryVector = await _embeddingService.GenerateEmbeddingAsync(query, ct);
 
-        var candidates = await _ragDb.KnowledgeChunks
+        var candidates = await VectorCandidates(_ragDb, queryVector, _options).ToListAsync(ct);
+
+        var readable = await ReadableSourcesAsync(candidates, ct);
+        var permitted = new List<SearchResult>();
+        foreach (var r in candidates)
+        {
+            if (SourceKey(r) is { } key && readable.TryGetValue(key, out var name))
+            {
+                r.SourceName = name;
+                permitted.Add(r);
+            }
+        }
+
+        // After the security filter: only chunks this user may read are ever sent to TypeSafe.
+        var (ordered, rerank) = await RerankAsync(query, permitted, ct);
+        var results = ordered.Take(_options.MaxResults).ToList();
+
+        _logger.LogInformation("RAG rerank for '{Query}': {Rerank}", query, rerank);
+        _logger.LogInformation("RAG search for '{Query}' returned {Count} results: {Sources}",
+            query, results.Count, string.Join(" | ", results.Select(r => r.SourceName).Distinct()));
+        return results;
+    }
+
+    /// <summary>
+    /// The exact kNN query, nearest first, <c>MaxResults * CandidateMultiplier</c> of them. Public so
+    /// the rerank evaluation (XafRag.RerankEval) measures the same ranking the app uses.
+    /// </summary>
+    public static IQueryable<SearchResult> VectorCandidates(RagDbContext db, SqlVector<float> queryVector, RagOptions options) =>
+        db.KnowledgeChunks
             .Select(k => new SearchResult
             {
                 Content = k.Content,
@@ -75,26 +113,73 @@ public class RagService
                 KnowledgeArticleId = k.KnowledgeArticleId,
                 DocumentId = k.DocumentId
             })
-            .Where(r => r.Distance <= _options.DistanceThreshold)
+            .Where(r => r.Distance <= options.DistanceThreshold)
             .OrderBy(r => r.Distance)
-            .Take(_options.MaxResults * CandidateMultiplier)
-            .ToListAsync(ct);
+            .Take(options.MaxResults * CandidateMultiplier);
 
-        var readable = await ReadableSourcesAsync(candidates, ct);
-        var results = new List<SearchResult>();
-        foreach (var r in candidates)
+    /// <summary>
+    /// RAG-003 spike: re-order the permitted candidates by TypeSafe relevance when an admin has
+    /// enabled it. Any failure (settings, TypeSafe, budget) keeps the distance order;
+    /// only the caller's own cancellation propagates.
+    /// </summary>
+    private async Task<(List<SearchResult> Ordered, string Status)> RerankAsync(
+        string query, List<SearchResult> permitted, CancellationToken ct)
+    {
+        if (permitted.Count <= _options.MaxResults)
+            return (permitted, "skipped, nothing to cut");
+
+        string? apiKey;
+        try
         {
-            if (SourceKey(r) is { } key && readable.TryGetValue(key, out var name))
-            {
-                r.SourceName = name;
-                results.Add(r);
-                if (results.Count == _options.MaxResults) break;
-            }
+            apiKey = ReadRerankApiKey();
         }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("Rerank settings unreadable, keeping distance order: {Error}", ex.Message);
+            return (permitted, "failed: settings");
+        }
+        if (apiKey == null)
+            return (permitted, "off");
 
-        _logger.LogInformation("RAG search for '{Query}' returned {Count} results: {Sources}",
-            query, results.Count, string.Join(" | ", results.Select(r => r.SourceName).Distinct()));
-        return results;
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        budget.CancelAfter(RerankBudget);
+        try
+        {
+            var scores = await _reranker.ScoreAsync(query, permitted.Select(r => r.Content).ToList(), apiKey, budget.Token);
+            // Sorted only once every passage has a score; scores are matched by input position and
+            // ties keep the distance order.
+            var ordered = permitted
+                .Select((r, i) => (r, i))
+                .OrderByDescending(x => scores.Nouls[x.i])
+                .ThenBy(x => x.i)
+                .Select(x => x.r)
+                .ToList();
+            return (ordered, $"reranked {permitted.Count} in {scores.Elapsed.TotalMilliseconds:F0} ms, " +
+                             $"{scores.InputTokens} input + {scores.OutputTokens} output tokens");
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            _logger.LogWarning("Rerank failed, keeping distance order: {Error}", ex.Message);
+            return (permitted, "failed");
+        }
+    }
+
+    /// <summary>
+    /// The TypeSafe key, or null when rerank is off. Read non-secured: this is server
+    /// configuration, and a user without access to the settings still gets the reranked search.
+    /// </summary>
+    private string? ReadRerankApiKey()
+    {
+        using var os = _nonSecuredObjectSpaceFactory.CreateNonSecuredObjectSpace<RerankSettings>();
+        var settings = os.GetObjectsQuery<RerankSettings>().OrderBy(s => s.Id).FirstOrDefault();
+        if (settings is not { Enabled: true })
+            return null;
+        if (string.IsNullOrEmpty(settings.ApiKey))
+        {
+            _logger.LogWarning("Rerank is enabled but no TypeSafe API key is set; keeping distance order");
+            return null;
+        }
+        return settings.ApiKey;
     }
 
     private static (ChunkSourceType, int)? SourceKey(SearchResult r) => r.SourceType switch
@@ -157,6 +242,16 @@ public class RagService
         Type type, object key, string member, string? value) =>
         security.CanRead(type, os, key, member) && !string.IsNullOrEmpty(value) ? value : "restricted source";
 
+    /// <summary>The system message for a set of results. Public so the rerank evaluation prompts identically.</summary>
+    public static string BuildSystemMessage(IReadOnlyCollection<SearchResult> searchResults)
+    {
+        var contextText = searchResults.Count > 0
+            ? string.Join("\n\n---\n\n", searchResults.Select(r =>
+                $"**[Part {r.ChunkIndex + 1} of \"{r.SourceName}\"]** {r.Content}"))
+            : "No relevant context found in the knowledge base.";
+        return $"{SystemPrompt}\n\n## Context:\n{contextText}";
+    }
+
     public async IAsyncEnumerable<string> AskAsync(
         string question,
         IList<ChatMessage>? conversationHistory = null,
@@ -164,14 +259,9 @@ public class RagService
     {
         var searchResults = await SearchAsync(question, ct);
 
-        var contextText = searchResults.Count > 0
-            ? string.Join("\n\n---\n\n", searchResults.Select(r =>
-                $"**[Part {r.ChunkIndex + 1} of \"{r.SourceName}\"]** {r.Content}"))
-            : "No relevant context found in the knowledge base.";
-
         var messages = new List<ChatMessage>
         {
-            new(ChatRole.System, $"{SystemPrompt}\n\n## Context:\n{contextText}")
+            new(ChatRole.System, BuildSystemMessage(searchResults))
         };
 
         if (conversationHistory != null)

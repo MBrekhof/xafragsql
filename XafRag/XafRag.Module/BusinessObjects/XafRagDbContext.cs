@@ -25,6 +25,7 @@ namespace XafRag.Module.BusinessObjects
         public DbSet<HCategory> HCategories { get; set; }
         public DbSet<KnowledgeArticle> KnowledgeArticles { get; set; }
         public DbSet<Document> Documents { get; set; }
+        public DbSet<RerankSettings> RerankSettings { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {

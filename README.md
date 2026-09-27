@@ -182,6 +182,7 @@ xafrag/
 │       ├── Startup.cs                        # DI wiring
 │       ├── Program.cs                        # Serilog configuration
 │       └── appsettings.json                  # Configuration (API key in Development.json)
+│   ├── XafRag.RerankEval/                    # Console: distance vs TypeSafe rerank on the sample docs
 │   └── XafRag.Tests/                         # Playwright end-to-end smoke test (see Tests)
 ```
 
@@ -210,7 +211,9 @@ When the user sends a message in the RAG Chat:
 User question
   → EmbeddingService           — embed the question (same model)
   → RagDbContext               — cosine distance search via VECTOR_DISTANCE, top 20 candidates under threshold
-  → Security filter            — keep only chunks whose article/document the user may read, top 5
+  → Security filter            — keep only chunks whose article/document the user may read
+  → TypeSafe rerank (optional) — re-order them by relevance, see "Re-ranking (experimental)"
+  → top 5
   → RagService                 — build system prompt: "[Part N of "filename.md"] chunk text..."
   → OpenAI gpt-4o              — streaming chat response
   → DxAIChat                   — render the Markdown answer in the browser
@@ -227,6 +230,22 @@ The chunks live in `RagDbContext`, outside XAF, so nothing there knows who is as
 To see it, log in as **Reader**. The `Readers` role may read only articles whose Tags contain `public`, cannot see those articles' Content when the Tags also contain `nocontent`, and has no access to Documents. RAG Chat answers Reader from those articles only.
 
 The filter runs after the vector search: 4 × `MaxResults` candidates are fetched and the first `MaxResults` readable ones are kept. A user who may read only a small share of the nearest chunks can get fewer than `MaxResults` results. If that matters, push the readable parent ids into the vector query instead.
+
+### Re-ranking (experimental)
+
+A spike (RAG-003): after the security filter, the permitted candidates can be re-scored by [TypeSafe](https://docs.typesafe.ai) before the top 5 go into the prompt. `TypeSafeReranker` sends one yes/no question per (question, passage) pair ("does this passage help answer the question?") and sorts by the returned probability. It is off by default.
+
+- **Turn it on:** log in as Admin → Knowledge Base → **Rerank Settings** → open the row → **Set API Key** (a password field; the key is never shown again) → tick *Rerank with TypeSafe* → Save. Only administrators can see this screen. The key is stored in the application database, in the `RerankSettings` table, the same way duetGPT keeps its provider keys: whoever can read that database can read the key.
+- **Only readable chunks leave the server:** reranking runs after the security filter, so TypeSafe only ever sees text the asking user may read.
+- **It can't break the chat:** a missing key, a TypeSafe error or more than 5 seconds all fall back to the distance order and log a warning.
+- **Saving:** *Set API Key* and *Clear API Key* change the value in the form; press Save as with any other edit. The settings are a single row, so there is no New or Delete. With 5 or fewer permitted candidates there is nothing to cut, so it is skipped.
+- **Existing database:** the settings table is added by XAF's schema update. Run `XafRag.Blazor.Server.exe --updateDatabase --silent` once, or start under the debugger.
+
+Whether it is worth it is measured by `XafRag/XafRag.RerankEval`, which runs 20 labelled questions over the sample documents both ways and writes [`docs/rerank-eval-report.md`](docs/rerank-eval-report.md). **Result on the sample documents:** the right chunk ranked first in 90% of questions instead of 60%, but it was already in the top 5 every time, so the answers were equally good either way, for about 0.75 s and $0.0007 extra per question. Not worth turning on for a small knowledge base; it would matter once the right chunk can fall outside the top 5. It uses the key stored in the app (set it there first; rerank need not be enabled). From the repository folder, in PowerShell or cmd (no admin needed):
+
+```
+dotnet run --project XafRag\XafRag.RerankEval
+```
 
 ---
 
@@ -274,6 +293,8 @@ Serilog writes to both the console and rolling log files at `logs/xafrag-YYYY-MM
 | `RagChat_Renders_LightAndDark` | RAG Chat renders; screenshots in light and dark mode | none |
 | `Article_IsIngested_AndAnsweredFromRetrieval` | 11 articles are ingested with 1536-dim embeddings, and the chat answers a question using a made-up fact that only one of them contains | embeddings + one chat |
 | `Retrieval_RespectsObjectAndMemberPermissions` | Reader gets answers from a `public` article, but neither an untagged one (object permission) nor one whose Content is hidden (member permission) reaches Reader's prompt. Checked on the server's search log, not only on the answer | embeddings + six chats |
+| `RerankSettings_StoresKey_NeverShown_AdminOnly` | The TypeSafe key entered in the popup is stored, never shown on screen or written to the log; Reader has no Rerank Settings menu item; no New/Delete on the single settings row | none |
+| `Rerank_FailsOpen_WhenTypeSafeRejectsTheKey` | With rerank on and a key TypeSafe rejects (401), the chat still answers correctly from the distance order | embeddings + one chat; a few rejected (free) TypeSafe calls |
 
 ```bash
 docker compose up -d
@@ -304,7 +325,7 @@ Upload these through the Document view to populate the knowledge base and test c
 ## Future Extensions
 
 - **Web search** — integrate Tavily, Bing, or OpenAI Responses API for answers beyond the knowledge base
-- **Hybrid search** — combine BM25 full-text search with vector search and re-rank results
+- **Hybrid search** — combine BM25 full-text search with vector search (re-ranking is already there, see "Re-ranking (experimental)")
 - **Query expansion** — generate multiple query variants to improve recall
 - **Chat history persistence** — store conversation threads in the database
 - **Background job queue** — replace fire-and-forget `Task.Run` with Hangfire for reliable ingestion

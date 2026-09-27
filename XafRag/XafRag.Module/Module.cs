@@ -40,6 +40,8 @@ namespace XafRag.Module
             AdditionalExportedTypes.Add(typeof(XafRag.Module.BusinessObjects.KnowledgeArticle));
             AdditionalExportedTypes.Add(typeof(XafRag.Module.BusinessObjects.Document));
             AdditionalExportedTypes.Add(typeof(XafRag.Module.BusinessObjects.RagChatHolder));
+            AdditionalExportedTypes.Add(typeof(XafRag.Module.BusinessObjects.RerankSettings));
+            AdditionalExportedTypes.Add(typeof(XafRag.Module.BusinessObjects.ApiKeyInput));
         }
         public override IEnumerable<ModuleUpdater> GetModuleUpdaters(IObjectSpace objectSpace, Version versionFromDB)
         {

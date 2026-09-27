@@ -1,0 +1,164 @@
+{
+  "questions": [
+    {
+      "id": "q01",
+      "kind": "easy",
+      "question": "What must a Razor component's name start with?",
+      "gold_file": "blazor-components.md",
+      "gold_phrase": "must start with an uppercase character",
+      "confuser": null
+    },
+    {
+      "id": "q02",
+      "kind": "easy",
+      "question": "Why does the EF Core getting-started tutorial choose SQLite as its database provider?",
+      "gold_file": "ef-core-getting-started.md",
+      "gold_phrase": "because it runs on all platforms that .NET supports",
+      "confuser": null
+    },
+    {
+      "id": "q03",
+      "kind": "easy",
+      "question": "What does Axiom 3 of the Dark Forest theory say is created between civilizations that cannot verify each other's true intentions?",
+      "gold_file": "dark-forest-theory.md",
+      "gold_phrase": "creates an unbreakable chain of suspicion",
+      "confuser": null
+    },
+    {
+      "id": "q04",
+      "kind": "easy",
+      "question": "In the Drake Equation, what does the term R* represent?",
+      "gold_file": "fermi-paradox.md",
+      "gold_phrase": "Rate of star formation in the galaxy",
+      "confuser": null
+    },
+    {
+      "id": "q05",
+      "kind": "easy",
+      "question": "What does the Object Space's CreateObject<T>() method do in XAF?",
+      "gold_file": "xaf-crud-operations.md",
+      "gold_phrase": "Creates a new persistent object",
+      "confuser": null
+    },
+    {
+      "id": "q06",
+      "kind": "easy",
+      "question": "What kind of password hashing does XAF's RFC 2898-based approach provide?",
+      "gold_file": "xaf-security-passwords.md",
+      "gold_phrase": "secure, salted password hashing",
+      "confuser": null
+    },
+    {
+      "id": "q07",
+      "kind": "paraphrased",
+      "question": "At what point in a component's lifecycle does a captured handle to a child component instance actually become usable?",
+      "gold_file": "blazor-components.md",
+      "gold_phrase": "only populated after the component is rendered",
+      "confuser": null
+    },
+    {
+      "id": "q08",
+      "kind": "paraphrased",
+      "question": "Why does a server send out prerendered HTML for a page before wiring up any event handlers?",
+      "gold_file": "blazor-fundamentals.md",
+      "gold_phrase": "makes the app feel more responsive to users",
+      "confuser": null
+    },
+    {
+      "id": "q09",
+      "kind": "paraphrased",
+      "question": "What benefit does grounding an LLM's answer in retrieved context provide, compared to relying only on its training data?",
+      "gold_file": "dotnet-rag-quickstart.md",
+      "gold_phrase": "reducing hallucinations and improving accuracy",
+      "confuser": null
+    },
+    {
+      "id": "q10",
+      "kind": "paraphrased",
+      "question": "What two application scenarios can a filter that is automatically applied to every query on an entity type help support?",
+      "gold_file": "ef-core-querying.md",
+      "gold_phrase": "implementing soft-delete patterns or multi-tenancy",
+      "confuser": null
+    },
+    {
+      "id": "q11",
+      "kind": "paraphrased",
+      "question": "If a connection between two entity types can be navigated from either side, how many distinct relationships does EF Core consider that to be?",
+      "gold_file": "ef-core-relationships.md",
+      "gold_phrase": "This is one relationship, not two",
+      "confuser": null
+    },
+    {
+      "id": "q12",
+      "kind": "paraphrased",
+      "question": "What advantage does implementing IObjectSpaceLink give EF Core-based business classes in XAF?",
+      "gold_file": "xaf-crud-operations.md",
+      "gold_phrase": "consistent data manipulation APIs across both ORM frameworks",
+      "confuser": null
+    },
+    {
+      "id": "q13",
+      "kind": "paraphrased",
+      "question": "If an administrator triggers a password reset on a user record that has pending unsaved edits, what happens to those edits by default?",
+      "gold_file": "xaf-security-passwords.md",
+      "gold_phrase": "Unsaved Detail View changes are discarded",
+      "confuser": null
+    },
+    {
+      "id": "q14",
+      "kind": "paraphrased",
+      "question": "After decades of scanning the sky for artificial radio transmissions, what has SETI actually confirmed so far?",
+      "gold_file": "fermi-paradox.md",
+      "gold_phrase": "no confirmed alien signal has been detected",
+      "confuser": null
+    },
+    {
+      "id": "q15",
+      "kind": "confusable",
+      "question": "Under the Zoo Hypothesis, how do advanced civilizations that know about us but avoid contact regard humanity?",
+      "gold_file": "dark-forest-theory.md",
+      "gold_phrase": "treating us as a protected species",
+      "confuser": "fermi-paradox.md"
+    },
+    {
+      "id": "q16",
+      "kind": "confusable",
+      "question": "How does the Fermi Paradox document characterize the core idea behind the Great Filter?",
+      "gold_file": "fermi-paradox.md",
+      "gold_phrase": "spacefaring civilization is extremely unlikely",
+      "confuser": "dark-forest-theory.md"
+    },
+    {
+      "id": "q17",
+      "kind": "confusable",
+      "question": "In EF Core's querying guide, when is data actually retrieved from the database under the Explicit Loading strategy?",
+      "gold_file": "ef-core-querying.md",
+      "gold_phrase": "explicitly loaded from the database at a later time",
+      "confuser": "ef-core-relationships.md"
+    },
+    {
+      "id": "q18",
+      "kind": "confusable",
+      "question": "According to the EF Core relationships document, using Include to eagerly load related data loads it as part of what?",
+      "gold_file": "ef-core-relationships.md",
+      "gold_phrase": "as part of the LINQ query",
+      "confuser": "ef-core-querying.md"
+    },
+    {
+      "id": "q19",
+      "kind": "confusable",
+      "question": "Which Blazor render mode starts out rendering interactively on the server and then switches to client-side rendering on later page visits?",
+      "gold_file": "blazor-fundamentals.md",
+      "gold_phrase": "Interactive SSR initially and then CSR on subsequent visits",
+      "confuser": "blazor-components.md"
+    },
+    {
+      "id": "q20",
+      "kind": "confusable",
+      "question": "How does the XAF documentation describe the Object Space's role relative to the data access layer?",
+      "gold_file": "xaf-crud-operations.md",
+      "gold_phrase": "is XAF's abstraction over the data access layer",
+      "confuser": "xaf-security-passwords.md"
+    }
+  ]
+}
