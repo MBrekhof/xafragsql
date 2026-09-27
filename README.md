@@ -182,6 +182,7 @@ xafrag/
 │       ├── Startup.cs                        # DI wiring
 │       ├── Program.cs                        # Serilog configuration
 │       └── appsettings.json                  # Configuration (API key in Development.json)
+│   └── XafRag.Tests/                         # Playwright end-to-end smoke test (see Tests)
 ```
 
 ---
@@ -248,6 +249,28 @@ All configuration lives in `appsettings.json`. The OpenAI API key should be plac
 ## Logging
 
 Serilog writes to both the console and rolling log files at `logs/xafrag-YYYY-MM-DD.log`. The ingestion pipeline logs every step (text extraction, chunking, embedding, saving) so you can diagnose issues without a debugger.
+
+---
+
+## Tests
+
+`XafRag/XafRag.Tests` is an end-to-end smoke test written with Playwright for .NET (NUnit). Each run drops and recreates a separate `XafRagSQL_Tests` database, creates the schema with `--updateDatabase`, starts the built server on `http://localhost:5091`, and stops it afterwards.
+
+| Test | Checks | OpenAI calls |
+|---|---|---|
+| `Login_ShowsMainWindow` | Admin can log in | none |
+| `RagChat_Renders_LightAndDark` | RAG Chat renders; screenshots in light and dark mode | none |
+| `Article_IsIngested_AndAnsweredFromRetrieval` | 11 articles are ingested with 1536-dim embeddings, and the chat answers a question using a made-up fact that only one of them contains | embeddings + one chat |
+
+```bash
+docker compose up -d
+dotnet build XafRag.slnx
+pwsh XafRag/XafRag.Tests/bin/Debug/net10.0/playwright.ps1 install chromium   # once
+dotnet test XafRag/XafRag.Tests
+dotnet test XafRag/XafRag.Tests --filter "TestCategory!=OpenAI"             # skip the paid calls
+```
+
+A valid OpenAI key in `appsettings.Development.json` is required even when the paid calls are filtered out, because the server creates its OpenAI client at startup and refuses to start with an empty key. Screenshots and the server's console output are attached to the test results, under `bin/<config>/net10.0/`.
 
 ---
 
