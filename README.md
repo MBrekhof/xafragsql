@@ -42,8 +42,8 @@ XafRagSQL is a tutorial and reference implementation showing how to add Retrieva
 1. **Clone the repository**
 
    ```bash
-   git clone https://github.com/your-org/xafrag.git
-   cd xafrag
+   git clone https://github.com/MBrekhof/xafragsql.git
+   cd xafragsql
    ```
 
 2. **Start SQL Server 2025**
@@ -132,7 +132,8 @@ no constraints, no Always Encrypted and no memory-optimized tables.
 ## Project Structure
 
 ```
-xafrag/
+xafragsql/
+├── CHANGELOG.md                              # Release notes (summary below)
 ├── docker-compose.yml                        # SQL Server 2025 (port 14333)
 ├── docs/                                     # Sample documents for demo upload
 │   ├── blazor-components.md
@@ -146,42 +147,48 @@ xafrag/
 │   ├── xaf-crud-operations.md
 │   ├── xaf-security-passwords.md
 │   ├── how_to_implement.md                   # Step-by-step implementation guide
+│   ├── rerank-eval-report.md                 # Output of XafRag.RerankEval
+│   ├── plans/                                # Design notes per card
 │   ├── architecture.spec.json               # Archify source for the diagram
 │   ├── architecture.html                    # Explorable diagram (open in a browser)
 │   └── architecture.png                     # Rendered diagram, embedded above
 ├── XafRag/
 │   ├── XafRag.Module/
+│   │   ├── DatabaseUpdate/Updater.cs         # Admin/Reader users, roles, settings row
 │   │   └── BusinessObjects/
 │   │       ├── KnowledgeArticle.cs           # XAF entity (title + content)
 │   │       ├── Document.cs                   # XAF entity (file upload, auto filename)
 │   │       ├── DocumentStatus.cs             # Pending → Processing → Completed/Failed
 │   │       ├── RagChatHolder.cs              # Non-persistent object backing the chat view
+│   │       ├── RerankSettings.cs             # Single-row TypeSafe rerank settings + API key
 │   │       ├── KnowledgeChunk.cs             # EF Core entity with vector(1536) column
 │   │       ├── ChunkSourceType.cs            # Article or Document enum
 │   │       ├── RagDbContext.cs               # Separate DbContext for vector operations
 │   │       └── XafRagDbContext.cs            # XAF-managed EF Core DbContext
-│   └── XafRag.Blazor.Server/
-│       ├── Configuration/
-│       │   ├── OpenAiOptions.cs              # API key + model names
-│       │   └── RagOptions.cs                 # Chunk size, overlap, search thresholds
-│       ├── Controllers/
-│       │   ├── KnowledgeArticleIngestionController.cs
-│       │   ├── DocumentIngestionController.cs
-│       │   └── RagChatWindowController.cs    # Redirects ListView → DetailView for chat
-│       ├── Editors/
-│       │   ├── RagChatViewItem.cs            # Custom XAF ViewItem (IComponentContentHolder)
-│       │   └── RagChatComponent.razor        # DxAIChat wrapper with Markdown rendering
-│       ├── Services/
-│       │   ├── ChunkingService.cs            # Paragraph-aware text splitter
-│       │   ├── EmbeddingService.cs           # Wraps IEmbeddingGenerator
-│       │   ├── DocumentProcessingService.cs  # PDF/DOCX/TXT/MD text extraction
-│       │   ├── IngestionService.cs           # Background ingestion with status tracking
-│       │   └── RagService.cs                 # Vector search + source resolution + LLM streaming
-│       ├── RagChatDetailViewUpdater.cs       # Programmatic model layout for chat view
-│       ├── BlazorModule.cs                   # Registers the detail view updater
-│       ├── Startup.cs                        # DI wiring
-│       ├── Program.cs                        # Serilog configuration
-│       └── appsettings.json                  # Configuration (API key in Development.json)
+│   ├── XafRag.Blazor.Server/
+│   │   ├── Configuration/
+│   │   │   ├── OpenAiOptions.cs              # API key + model names
+│   │   │   └── RagOptions.cs                 # Chunk size, overlap, search thresholds
+│   │   ├── Controllers/
+│   │   │   ├── KnowledgeArticleIngestionController.cs
+│   │   │   ├── DocumentIngestionController.cs
+│   │   │   ├── RagChatWindowController.cs    # Redirects ListView → DetailView for chat
+│   │   │   └── RerankSettingsController.cs   # Set/Clear API Key popup, admin only
+│   │   ├── Editors/
+│   │   │   ├── RagChatViewItem.cs            # Custom XAF ViewItem (IComponentContentHolder)
+│   │   │   └── RagChatComponent.razor        # DxAIChat wrapper with Markdown rendering
+│   │   ├── Services/
+│   │   │   ├── ChunkingService.cs            # Paragraph-aware text splitter
+│   │   │   ├── EmbeddingService.cs           # Wraps IEmbeddingGenerator
+│   │   │   ├── DocumentProcessingService.cs  # PDF/DOCX/TXT/MD text extraction
+│   │   │   ├── IngestionService.cs           # Background ingestion with status tracking
+│   │   │   ├── RagService.cs                 # Vector search + security filter + LLM streaming
+│   │   │   └── TypeSafeReranker.cs           # Optional rerank, falls back to distance order
+│   │   ├── RagChatDetailViewUpdater.cs       # Programmatic model layout for chat view
+│   │   ├── BlazorModule.cs                   # Registers the detail view updater
+│   │   ├── Startup.cs                        # DI wiring
+│   │   ├── Program.cs                        # Serilog configuration
+│   │   └── appsettings.json                  # Configuration (API key in Development.json)
 │   ├── XafRag.RerankEval/                    # Console: distance vs TypeSafe rerank on the sample docs
 │   └── XafRag.Tests/                         # Playwright end-to-end smoke test (see Tests)
 ```
@@ -335,6 +342,18 @@ Upload these through the Document view to populate the knowledge base and test c
 ## Implementation Guide
 
 See [docs/how_to_implement.md](docs/how_to_implement.md) for a step-by-step guide on adding RAG to your own XAF application.
+
+---
+
+## Changelog
+
+Details per entry in [CHANGELOG.md](CHANGELOG.md).
+
+- **2026-09-28** — Optional TypeSafe re-ranking with an admin settings screen and an evaluation tool (RAG-003)
+- **2026-09-27** — RAG retrieval goes through XAF security; new Reader demo user (SEC-001)
+- **2026-09-27** — Playwright end-to-end smoke tests (TEST-001)
+- **2026-09-20** — Code-review fixes: transactional FK script, batched source-name lookups
+- **2026-09-20** — Initial release: RAG for XAF on SQL Server 2025
 
 ---
 
